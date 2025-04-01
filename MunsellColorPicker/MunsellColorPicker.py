@@ -1,13 +1,15 @@
 import math
-from .MunsellFloats import *
-from krita import *
-from krita import ManagedColor
+import os
+from .MunsellInterpolate import *
+from krita import * # type: ignore
+from krita import ManagedColor # type: ignore
 from PyQt5.QtCore import QSize, QTimer, Qt
 from PyQt5.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QApplication, QColorDialog, QGridLayout
+    QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QApplication, QColorDialog, QGridLayout, QTextEdit, QRadioButton, QButtonGroup
 )
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtGui import QColor, QClipboard
+from PyQt5.QtGui import QColor, QClipboard, QTextCursor
+import colorsys
 
 DOCKER_TITLE = 'Munsell Color Picker'
 
@@ -39,7 +41,8 @@ class ClickableLabel(QLabel):
             clipboard = QApplication.clipboard()
             clipboard.setText(self.color_hex)  # Copy hex to clipboard
             self.colorClicked.emit(self.color_hex)  # Emit signal when clicked
-class DockerTemplate(DockWidget):
+
+class DockerTemplate(DockWidget): # type: ignore
 
     def __init__(self):
         super().__init__()
@@ -55,6 +58,9 @@ class DockerTemplate(DockWidget):
 
         self.setUI()
         self.last_foreground_hex = None
+        self.cached_light_chroma_colors = []
+        self.cached_hue_chroma_colors = []
+        self.cached_light_hue_colors = []
 
     def setUI(self):
         self.base_widget = QWidget()
@@ -62,6 +68,44 @@ class DockerTemplate(DockWidget):
         self.main_container.setContentsMargins(1, 1, 1, 1)
 
         color_layout = QHBoxLayout()
+        color_layout.setSpacing(4)  # Reduce space between fg/bg labels and buttons
+        color_layout.setContentsMargins(0, 0, 0, 0)  # Optional: remove outer padding
+
+        # Radio buttons to switch grids
+        self.mode_lightchroma = QRadioButton("Light–Chroma")
+        self.mode_huechroma = QRadioButton("Hue–Chroma")
+        self.mode_lighthue = QRadioButton("Light–Hue")
+        self.mode_lightchroma.setChecked(True)
+
+        mode_buttons = QHBoxLayout()
+        mode_buttons.addWidget(self.mode_lightchroma)
+        mode_buttons.addWidget(self.mode_huechroma)
+        mode_buttons.addWidget(self.mode_lighthue)
+        self.main_container.addLayout(mode_buttons)
+
+        # Group them to manage logic
+        self.mode_button_group = QButtonGroup()
+        self.mode_button_group.addButton(self.mode_lightchroma)
+        self.mode_button_group.addButton(self.mode_huechroma)
+        self.mode_button_group.addButton(self.mode_lighthue)
+        self.mode_lightchroma.toggled.connect(self.updateModeVisibility)
+        self.mode_huechroma.toggled.connect(self.updateModeVisibility)
+        self.mode_lighthue.toggled.connect(self.updateModeVisibility)
+
+        # Generate Light-Chroma button (next to radio)
+        self.generate_lightchroma_button = QPushButton("Generate Light-Chroma")
+        self.generate_lightchroma_button.clicked.connect(self.onGenerateLightChroma)
+        mode_buttons.addWidget(self.generate_lightchroma_button)
+        
+        # Generate Hue-Chroma button (next to radio)
+        self.generate_huechroma_button = QPushButton("Generate Hue-Chroma")
+        self.generate_huechroma_button.clicked.connect(self.onGenerateHueChroma)
+        mode_buttons.addWidget(self.generate_huechroma_button)
+        
+        # Generate Light–Hue button
+        self.generate_lighthue_button = QPushButton("Generate Light–Hue")
+        self.generate_lighthue_button.clicked.connect(self.onGenerateLightHue)
+        mode_buttons.addWidget(self.generate_lighthue_button)
 
         # Foreground Hex Text (Copies Hex)
         self.fg_color_label = ClickableLabel("#000000", "#000000")
@@ -86,19 +130,48 @@ class DockerTemplate(DockWidget):
         self.main_container.addLayout(color_layout)
 
         # Grid for transition colors
+        transition_header = QLabel("Color Transition")
+        transition_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        self.main_container.addWidget(transition_header)
         self.color_grid = QGridLayout()
         self.main_container.addLayout(self.color_grid)
 
-        # Grid for Munsell colors
-        self.munsell_grid = QGridLayout()
-        self.main_container.addLayout(self.munsell_grid)
+        grid_header = QLabel("Color Grid")
+        grid_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        self.main_container.addWidget(grid_header)
+        # Grid for Hue-Chroma colors (new)
+        self.lightchroma_grid = QGridLayout()
+        self.lightchroma_grid.setSpacing(2)
+        self.lightchroma_grid.setContentsMargins(0, 0, 0, 0)
+        self.main_container.addLayout(self.lightchroma_grid)
+
+
+        # Grid for Hue-Chroma colors (new)
+        self.huechroma_grid = QGridLayout()
+        self.huechroma_grid.setSpacing(2)
+        self.huechroma_grid.setContentsMargins(0, 0, 0, 0)
+        self.main_container.addLayout(self.huechroma_grid)
+
+        # Grid for Light–Hue colors
+        self.lighthue_grid = QGridLayout()
+        self.lighthue_grid.setSpacing(2)
+        self.lighthue_grid.setContentsMargins(0, 0, 0, 0)
+        self.main_container.addLayout(self.lighthue_grid)
 
         # History layout
+        history_header = QLabel("Color History")
+        history_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        self.main_container.addWidget(history_header)
         self.color_history = []  # list of hex strings
         self.color_history_grid = QGridLayout()
         self.main_container.addLayout(self.color_history_grid)
 
         # Exception display box
+        self.error_display = QLabel("")
+        self.error_display.setStyleSheet("color: red;")
+        self.main_container.addWidget(self.error_display)
+        
+        # Exception display box (disappears after 5s)
         self.error_display = QLabel("")
         self.error_display.setStyleSheet("color: red;")
         self.main_container.addWidget(self.error_display)
@@ -109,12 +182,34 @@ class DockerTemplate(DockWidget):
         self.base_widget.setMinimumSize(QSize(250, 150))
 
         self.updateColorInfo()
+        self.updateModeVisibility()
         
+    def updateModeVisibility(self):
+        is_lightchroma = self.mode_lightchroma.isChecked()
+        is_huechroma = self.mode_huechroma.isChecked()
+        is_lighthue = self.mode_lighthue.isChecked()
+
+        # Buttons
+        self.generate_lightchroma_button.setVisible(is_lightchroma)
+        self.generate_huechroma_button.setVisible(is_huechroma)
+        self.generate_lighthue_button.setVisible(is_lighthue)
+
+        # Grids
+        self.setLayoutVisibility(self.lightchroma_grid, is_lightchroma)
+        self.setLayoutVisibility(self.huechroma_grid, is_huechroma)
+        self.setLayoutVisibility(self.lighthue_grid, is_lighthue)
+
+    def setLayoutVisibility(self, layout, visible):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item and item.widget():
+                item.widget().setVisible(visible)
+            
     def updateColorInfo(self):
         """Update the color information and generate transition colors"""
         try:
-            if Krita.instance():
-                view = Application.activeWindow().activeView()
+            if Krita.instance(): # type: ignore
+                view = Krita.instance().activeWindow().activeView() # type: ignore
                 fg_color = view.foregroundColor()
                 bg_color = view.backgroundColor()
 
@@ -127,69 +222,242 @@ class DockerTemplate(DockWidget):
                 fg_hex = f"#{fg_r:02X}{fg_g:02X}{fg_b:02X}"
                 bg_hex = f"#{bg_r:02X}{bg_g:02X}{bg_b:02X}"
 
-                self.fg_color_label.setTextAndColor(fg_hex, fg_hex)
-                self.bg_color_label.setTextAndColor(bg_hex, bg_hex)
+                if self.last_foreground_hex != fg_hex:
+                    # update only if color changed
+                    self.fg_color_label.setTextAndColor(fg_hex, fg_hex)
+                    self.bg_color_label.setTextAndColor(bg_hex, bg_hex)
 
-                self.fg_color_button.setStyleSheet(f"background-color: {fg_hex};")
-                self.bg_color_button.setStyleSheet(f"background-color: {bg_hex};")
+                    self.fg_color_button.setStyleSheet(f"background-color: {fg_hex};")
+                    self.bg_color_button.setStyleSheet(f"background-color: {bg_hex};")
 
-                # Clear the grid before adding new labels
-                for i in reversed(range(self.color_grid.count())):
-                    self.color_grid.itemAt(i).widget().setParent(None)
+                    # Update transition colors
+                    for i in reversed(range(self.color_grid.count())):
+                        self.color_grid.itemAt(i).widget().setParent(None)
 
-                # Generate 10 gradient transition colors
-                for i in range(10):
-                    ratio = i / 9.0  # Normalize between 0 and 1
-                    mid_r = int(fg_r * (1 - ratio) + bg_r * ratio)
-                    mid_g = int(fg_g * (1 - ratio) + bg_g * ratio)
-                    mid_b = int(fg_b * (1 - ratio) + bg_b * ratio)
+                    for i in range(10):
+                        ratio = i / 9.0
+                        mid_r = int(fg_r * (1 - ratio) + bg_r * ratio)
+                        mid_g = int(fg_g * (1 - ratio) + bg_g * ratio)
+                        mid_b = int(fg_b * (1 - ratio) + bg_b * ratio)
+                        mid_hex = f"#{mid_r:02X}{mid_g:02X}{mid_b:02X}"
+                        row, col = divmod(i, 5)
+                        label = ClickableLabel(mid_hex, mid_hex)
+                        label.colorClicked.connect(self.setForeGroundColor)
+                        self.color_grid.addWidget(label, row, col)
 
-                    mid_hex = f"#{mid_r:02X}{mid_g:02X}{mid_b:02X}"
+                    self.last_foreground_hex = fg_hex
 
-                    # Place in 2 rows of 5
-                    row, col = divmod(i, 5)
-
-                    label = ClickableLabel(mid_hex, mid_hex)
-                    label.colorClicked.connect(self.setForeGroundColor)  # Connect click event
-                    self.color_grid.addWidget(label, row, col)
-                
-                # Add another grid of Munsell-based interpolated colors
-                if hasattr(self, 'munsell_grid'):
-                    for i in reversed(range(self.munsell_grid.count())):
-                        self.munsell_grid.itemAt(i).widget().setParent(None)
-                else:
-                    self.munsell_grid = QGridLayout()
-                    self.main_container.addLayout(self.munsell_grid)
-
-                # Derive value/chroma inputs from foreground color
-                fg_luma = 0.299 * fg_r + 0.587 * fg_g + 0.114 * fg_b  # approximate lightness
-                fg_luma_norm = fg_luma / 255
-
-                # Use lightness to affect Munsell j_pos and k_pos
-                for i in range(10):
-                    i_pos = (i % 5) / 5 * 39                      # hue
-                    j_pos = 0.1 + fg_luma_norm * 0.9              # value
-                    k_pos = 0.5 + ((i // 5) / 1.0) * 1.5           # chroma
-                    j_pos = max(0, min(1, j_pos))
-                    k_pos = max(0, min(1, k_pos))
-                    rgb = munsell_interpolate(i_pos, j_pos, k_pos)
-                    hex_code = "#{:02X}{:02X}{:02X}".format(*rgb)
-                    label = ClickableLabel(hex_code, hex_code)
-                    label.colorClicked.connect(self.setForeGroundColor)
-                    self.munsell_grid.addWidget(label, i // 5, i % 5)
-
-            if self.last_foreground_hex != fg_hex:
-                self.addColorToHistory(fg_hex)
-                self.last_foreground_hex = fg_hex
+                    self.addColorToHistory(fg_hex)
                 
         except Exception as e:
             self.showError(f"Update Error: {str(e)}")
             
+    def onGenerateLightChroma(self):
+        try:
+            view = Krita.instance().activeWindow().activeView() # type: ignore
+            if not view:
+                return
+
+            fg_color = view.foregroundColor()
+            fg_components = fg_color.components()
+            r_norm = fg_components[2]
+            g_norm = fg_components[1]
+            b_norm = fg_components[0]
+
+            # Use HLS to get the lightness
+            hue_float, _, _ = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+            hue_scaled = hue_float * 40.0
+            self.cached_light_chroma_colors = self.GetLightChromaColors(hue_scaled)
+            
+            self.renderLightChromaGrid()
+
+        except Exception as e:
+            self.showError(f"Light-Chroma Error: {str(e)}")
+
+    def renderLightChromaGrid(self):
+        self.clearAllGrids()
+        for i in reversed(range(self.lightchroma_grid.count())):
+            item = self.lightchroma_grid.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
+
+        # Add updated hue-chroma colors to grid
+        for light_index, row in enumerate(self.cached_light_chroma_colors):
+            for chroma_index, color in enumerate(row):
+                r, g, b = srgb_coords(color)
+                hex_code = f"#{r:02X}{g:02X}{b:02X}"
+                label = ClickableLabel(hex_code, hex_code)
+                label.colorClicked.connect(self.setForeGroundColor)
+                self.lightchroma_grid.addWidget(label, light_index, chroma_index)  # chroma = row, hue = column
+
+    def GetLightChromaColors(self, hue):
+        all_colors = []
+
+        for j in range(1, 15):  # Lightness levels
+            row_colors = []
+            for k in range(26):  # Chroma steps
+                color = munsell_interpolate(hue, j, k)
+
+                # Stop if color is clearly invalid or black placeholder
+                if not color_charted(color) or color == [0, 0, 0]:
+                    break
+
+                color_norm = [c / 255.0 for c in color]
+
+                if not color_valid(color_norm):
+                    break
+
+                srgb = srgb_coords(color_norm)
+                if sum(srgb) <= 30:  # very dark or clipped
+                    break
+
+                row_colors.append(color_norm)
+
+            if row_colors:
+                all_colors.append(row_colors)
+
+        return all_colors
+    
+    def GetHueChromaColors(self, light):
+        # this is filling a like circle not a list
+        all_colors = []
+
+        for i in range(40):  # Hues (0–39)
+            hue_colors = []
+
+            for k in range(26):  # Chroma
+                color = munsell_interpolate(i, light, k)
+
+                if not color_charted(color) or color == [0, 0, 0]:
+                    break
+
+                color_norm = [c / 255.0 for c in color]
+
+                if not color_valid(color_norm):
+                    break
+
+                srgb = srgb_coords(color_norm)
+
+                if sum(srgb) <= 30:
+                    break
+
+                hue_colors.append(color_norm)
+
+            all_colors.append(hue_colors)
+
+        return all_colors
+    
+    def GetLightHueColors(self, chroma):
+        all_colors = []
+
+        for j in range(1, 15):  # Lightness (Value)
+            row_colors = []
+            for i in range(40):  # Hue
+                color = munsell_interpolate(i, j, chroma)
+
+                if not color_charted(color) or color == [0, 0, 0]:
+                    continue
+
+                color_norm = [c / 255.0 for c in color]
+                if not color_valid(color_norm):
+                    break
+
+                srgb = srgb_coords(color_norm)
+                if sum(srgb) <= 30:
+                    break
+
+                row_colors.append(color_norm)
+            all_colors.append(row_colors)
+
+        return all_colors
+    
+    def onGenerateLightHue(self):
+        try:
+            view = Krita.instance().activeWindow().activeView() # type: ignore
+            if not view:
+                return
+
+            fg_color = view.foregroundColor()
+            fg_components = fg_color.components()
+            r_norm = fg_components[2]
+            g_norm = fg_components[1]
+            b_norm = fg_components[0]
+
+            # Use HLS to extract chroma proxy (based on saturation)
+            h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+            chroma_index = min(int(s * 25), 25)  # clamp to valid range [0–25]
+
+            self.cached_light_hue_colors = self.GetLightHueColors(chroma_index)
+            self.renderLightHueGrid()
+        except Exception as e:
+            self.showError(f"Light-Hue Error: {str(e)}")
+            
+    def renderLightHueGrid(self):
+        self.clearAllGrids()
+        for i in reversed(range(self.lighthue_grid.count())):
+            item = self.lighthue_grid.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
+                
+        for lightness_index, row in enumerate(self.cached_light_hue_colors):
+            for hue_index, color in enumerate(row):
+                r, g, b = srgb_coords(color)
+                hex_code = f"#{r:02X}{g:02X}{b:02X}"
+                label = ClickableLabel(hex_code, hex_code)
+                label.colorClicked.connect(self.setForeGroundColor)
+                self.lighthue_grid.addWidget(label, lightness_index, hue_index)
+
+    def onGenerateHueChroma(self):
+        try:
+            view = Krita.instance().activeWindow().activeView() # type: ignore
+            if not view:
+                return
+
+            fg_color = view.foregroundColor()
+            fg_components = fg_color.components()
+            r_norm = fg_components[2]
+            g_norm = fg_components[1]
+            b_norm = fg_components[0]
+
+            # Use HLS to get the lightness
+            _, _, light_float = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
+            lightness_scaled = light_float * 10
+
+            self.cached_hue_chroma_colors = self.GetHueChromaColors(lightness_scaled)
+            self.renderHueChromaGrid()
+
+        except Exception as e:
+            self.showError(f"Hue-Chroma Error: {str(e)}")
+
+    def renderHueChromaGrid(self):
+        self.clearAllGrids()
+        # Clear existing hue-chroma grid
+        for i in reversed(range(self.huechroma_grid.count())):
+            item = self.huechroma_grid.itemAt(i)
+            if item and item.widget():
+                item.widget().setParent(None)
+
+        # Add updated hue-chroma colors to grid
+        for hue_index, row in enumerate(self.cached_hue_chroma_colors):
+            for chroma_index, color in enumerate(row):
+                r, g, b = srgb_coords(color)
+                hex_code = f"#{r:02X}{g:02X}{b:02X}"
+                label = ClickableLabel(hex_code, hex_code)
+                label.colorClicked.connect(self.setForeGroundColor)
+                self.huechroma_grid.addWidget(label, chroma_index, hue_index)
+
+    def clearAllGrids(self):
+        for layout in [self.lightchroma_grid, self.huechroma_grid, self.lighthue_grid]:
+            for i in reversed(range(layout.count())):
+                item = layout.itemAt(i)
+                if item and item.widget():
+                    item.widget().setParent(None)
+
     def showError(self, message):
         """Display error and start a timer to clear it after 5 seconds"""
         self.error_display.setText(message)
         self.error_clear_timer.start(5000)
-
+        
     def clearErrorMessage(self):
         """Clear the error display box"""
         self.error_display.clear()
@@ -203,7 +471,7 @@ class DockerTemplate(DockWidget):
         try:
             color = QColorDialog.getColor()
             if color.isValid():
-                view = Krita.instance().activeWindow().activeView()
+                view = Krita.instance().activeWindow().activeView() # type: ignore
                 if view:
                     managed = ManagedColor("RGBA", "U8", "")
                     components = managed.components()
@@ -217,16 +485,16 @@ class DockerTemplate(DockWidget):
                     
                     hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
                     self.addColorToHistory(hex_code)
+                    
         except Exception as e:
             self.showError(f"FG Error: {str(e)}")
-
 
     def onBgColorClick(self):
         """Open color picker when background button is clicked"""
         try:
             color = QColorDialog.getColor()
             if color.isValid():
-                view = Krita.instance().activeWindow().activeView()
+                view = Krita.instance().activeWindow().activeView() # type: ignore
                 if view:
                     managed = ManagedColor("RGBA", "U8", "")
                     components = managed.components()
@@ -235,18 +503,44 @@ class DockerTemplate(DockWidget):
                     components[0] = color.blueF()
                     components[3] = 1.0
                     managed.setComponents(components)
-                    view.setBackgroundColor(managed)
+                    view.setBackGroundColor(managed)
                     self.updateColorInfo()
                     
                     hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
                     self.addColorToHistory(hex_code)
+                    
+                    self.bg_color_label.setTextAndColor(hex_code, hex_code)
+                    self.bg_color_button.setStyleSheet(f"background-color: {hex_code};")
+                    
         except Exception as e:
             self.showError(f"BG Error: {str(e)}")
+            
+    def setBackGroundColor(self, color_hex):
+        """Set the clicked color as the new background color using ManagedColor"""
+        try:
+            view = Krita.instance().activeWindow().activeView() # type: ignore
+            if view:
+                color = ManagedColor("RGBA", "U8", "")
+                r = int(color_hex[1:3], 16) / 255
+                g = int(color_hex[3:5], 16) / 255
+                b = int(color_hex[5:7], 16) / 255
+                components = color.components()
+                components[2] = r
+                components[1] = g
+                components[0] = b
+                components[3] = 1.0  # alpha
+                color.setComponents(components)
+                view.setBackGroundColor(color)
+                self.updateColorInfo()
+                self.addColorToHistory(color_hex)
+
+        except Exception as e:
+            self.showError(f"FG Set Error: {str(e)}")
             
     def setForeGroundColor(self, color_hex):
         """Set the clicked color as the new foreground color using ManagedColor"""
         try:
-            view = Krita.instance().activeWindow().activeView()
+            view = Krita.instance().activeWindow().activeView() # type: ignore
             if view:
                 color = ManagedColor("RGBA", "U8", "")
                 r = int(color_hex[1:3], 16) / 255
@@ -285,36 +579,3 @@ class DockerTemplate(DockWidget):
             label = ClickableLabel(hex_code, hex_code)
             label.colorClicked.connect(self.setForeGroundColor)
             self.color_history_grid.addWidget(label, row, col)
-
-
-def mul(factor, maybe_number):
-    if factor == 0 or maybe_number is None or math.isnan(maybe_number):
-        return 0
-    return factor * maybe_number
-
-def munsell_interpolate(i, j, k):
-    i0 = int(math.floor(i))
-    j0 = int(math.floor(j))
-    k0 = int(math.floor(k))
-    i1 = (i0 + 1) % 40
-    j1 = j0 + 1
-    k1 = k0 + 1
-    a1 = i - i0
-    b1 = j - j0
-    c1 = k - k0
-    a0 = 1 - a1
-    b0 = 1 - b1
-    c0 = 1 - c1
-    ans = [0.0, 0.0, 0.0]
-    for t in range(3):
-        ans[t] = (
-            mul(a0 * b0 * c0, Munsell[i0][j0][k0][t]) +
-            mul(a1 * b0 * c0, Munsell[i1][j0][k0][t]) +
-            mul(a0 * b1 * c0, Munsell[i0][j1][k0][t]) +
-            mul(a1 * b1 * c0, Munsell[i1][j1][k0][t]) +
-            mul(a0 * b0 * c1, Munsell[i0][j0][k1][t]) +
-            mul(a1 * b0 * c1, Munsell[i1][j0][k1][t]) +
-            mul(a0 * b1 * c1, Munsell[i0][j1][k1][t]) +
-            mul(a1 * b1 * c1, Munsell[i1][j1][k1][t])
-        )
-    return [int(max(0, min(255, round(v * 255)))) for v in ans]
