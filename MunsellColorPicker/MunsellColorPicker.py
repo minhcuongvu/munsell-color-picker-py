@@ -304,7 +304,7 @@ class DockerTemplate(DockWidget): # type: ignore
             for chroma_index, color in enumerate(row):
                 r, g, b = srgb_coords(color)
                 hex_code = f"#{r:02X}{g:02X}{b:02X}"
-                label = ClickableLabel(hex_code, hex_code)
+                label = ClickableLabel(None, hex_code)
                 label.colorClicked.connect(self.setForeGroundColor)
                 self.lightchroma_grid.addWidget(label, light_index, chroma_index)  # chroma = row, hue = column
 
@@ -423,7 +423,7 @@ class DockerTemplate(DockWidget): # type: ignore
             for hue_index, color in enumerate(row):
                 r, g, b = srgb_coords(color)
                 hex_code = f"#{r:02X}{g:02X}{b:02X}"
-                label = ClickableLabel(hex_code, hex_code)
+                label = ClickableLabel(None, hex_code)
                 label.colorClicked.connect(self.setForeGroundColor)
                 self.lighthue_grid.addWidget(label, lightness_index, hue_index)
 
@@ -441,9 +441,9 @@ class DockerTemplate(DockWidget): # type: ignore
 
             # Use HLS to get the lightness
             _, _, light_float = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-            lightness_scaled = light_float * 10
+            lightness_index = max(1, min(round(light_float * 10), 10))  # Clamp
+            self.cached_hue_chroma_colors = self.GetHueChromaColors(lightness_index)
 
-            self.cached_hue_chroma_colors = self.GetHueChromaColors(lightness_scaled)
             self.renderHueChromaGrid()
 
         except Exception as e:
@@ -462,7 +462,7 @@ class DockerTemplate(DockWidget): # type: ignore
             for chroma_index, color in enumerate(row):
                 r, g, b = srgb_coords(color)
                 hex_code = f"#{r:02X}{g:02X}{b:02X}"
-                label = ClickableLabel(hex_code, hex_code)
+                label = ClickableLabel(None, hex_code)
                 label.colorClicked.connect(self.setForeGroundColor)
                 self.huechroma_grid.addWidget(label, chroma_index, hue_index)
 
