@@ -57,12 +57,13 @@ class DockerTemplate(DockWidget): # type: ignore
         self.colorUpdateTimer.start(500)
 
         self.setUI()
+
+    def setUI(self):
         self.last_foreground_hex = None
         self.cached_light_chroma_colors = []
         self.cached_hue_chroma_colors = []
         self.cached_light_hue_colors = []
-
-    def setUI(self):
+        
         self.base_widget = QWidget()
         self.main_container = QVBoxLayout()
         self.main_container.setContentsMargins(1, 1, 1, 1)
@@ -72,9 +73,9 @@ class DockerTemplate(DockWidget): # type: ignore
         color_layout.setContentsMargins(0, 0, 0, 0)  # Optional: remove outer padding
 
         # Radio buttons to switch grids
-        self.mode_lightchroma = QRadioButton("Light–Chroma")
-        self.mode_huechroma = QRadioButton("Hue–Chroma")
-        self.mode_lighthue = QRadioButton("Light–Hue")
+        self.mode_lightchroma = QRadioButton("Fixed Hue")
+        self.mode_huechroma = QRadioButton("Fixed Light")
+        self.mode_lighthue = QRadioButton("Fixed Chroma")
         self.mode_lightchroma.setChecked(True)
 
         mode_buttons = QHBoxLayout()
@@ -93,17 +94,17 @@ class DockerTemplate(DockWidget): # type: ignore
         self.mode_lighthue.toggled.connect(self.updateModeVisibility)
 
         # Generate Light-Chroma button (next to radio)
-        self.generate_lightchroma_button = QPushButton("Generate Light-Chroma")
+        self.generate_lightchroma_button = QPushButton("Generate")
         self.generate_lightchroma_button.clicked.connect(self.onGenerateLightChroma)
         mode_buttons.addWidget(self.generate_lightchroma_button)
         
         # Generate Hue-Chroma button (next to radio)
-        self.generate_huechroma_button = QPushButton("Generate Hue-Chroma")
+        self.generate_huechroma_button = QPushButton("Generate")
         self.generate_huechroma_button.clicked.connect(self.onGenerateHueChroma)
         mode_buttons.addWidget(self.generate_huechroma_button)
         
         # Generate Light–Hue button
-        self.generate_lighthue_button = QPushButton("Generate Light–Hue")
+        self.generate_lighthue_button = QPushButton("Generate")
         self.generate_lighthue_button.clicked.connect(self.onGenerateLightHue)
         mode_buttons.addWidget(self.generate_lighthue_button)
 
@@ -139,22 +140,22 @@ class DockerTemplate(DockWidget): # type: ignore
         grid_header = QLabel("Color Grid")
         grid_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
         self.main_container.addWidget(grid_header)
-        # Grid for Hue-Chroma colors (new)
+        
+        # Grid for Hue-Chroma colors
         self.lightchroma_grid = QGridLayout()
-        self.lightchroma_grid.setSpacing(2)
+        self.lightchroma_grid.setSpacing(1)
         self.lightchroma_grid.setContentsMargins(0, 0, 0, 0)
         self.main_container.addLayout(self.lightchroma_grid)
 
-
-        # Grid for Hue-Chroma colors (new)
+        # Grid for Hue-Chroma colors
         self.huechroma_grid = QGridLayout()
-        self.huechroma_grid.setSpacing(2)
+        self.huechroma_grid.setSpacing(1)
         self.huechroma_grid.setContentsMargins(0, 0, 0, 0)
         self.main_container.addLayout(self.huechroma_grid)
 
         # Grid for Light–Hue colors
         self.lighthue_grid = QGridLayout()
-        self.lighthue_grid.setSpacing(2)
+        self.lighthue_grid.setSpacing(1)
         self.lighthue_grid.setContentsMargins(0, 0, 0, 0)
         self.main_container.addLayout(self.lighthue_grid)
 
@@ -166,11 +167,6 @@ class DockerTemplate(DockWidget): # type: ignore
         self.color_history_grid = QGridLayout()
         self.main_container.addLayout(self.color_history_grid)
 
-        # Exception display box
-        self.error_display = QLabel("")
-        self.error_display.setStyleSheet("color: red;")
-        self.main_container.addWidget(self.error_display)
-        
         # Exception display box (disappears after 5s)
         self.error_display = QLabel("")
         self.error_display.setStyleSheet("color: red;")
@@ -189,15 +185,37 @@ class DockerTemplate(DockWidget): # type: ignore
         is_huechroma = self.mode_huechroma.isChecked()
         is_lighthue = self.mode_lighthue.isChecked()
 
-        # Buttons
+        # Toggle button visibility
         self.generate_lightchroma_button.setVisible(is_lightchroma)
         self.generate_huechroma_button.setVisible(is_huechroma)
         self.generate_lighthue_button.setVisible(is_lighthue)
 
-        # Grids
-        self.setLayoutVisibility(self.lightchroma_grid, is_lightchroma)
-        self.setLayoutVisibility(self.huechroma_grid, is_huechroma)
-        self.setLayoutVisibility(self.lighthue_grid, is_lighthue)
+        # Clear all visible grid widgets (but keep layout structure)
+        self.setLayoutVisibility(self.lightchroma_grid, False)
+        self.setLayoutVisibility(self.huechroma_grid, False)
+        self.setLayoutVisibility(self.lighthue_grid, False)
+
+        # Show the one relevant layout
+        if is_lightchroma:
+            if not self.cached_light_chroma_colors:
+                self.onGenerateLightChroma()
+            else:
+                self.renderLightChromaGrid()
+            self.setLayoutVisibility(self.lightchroma_grid, True)
+
+        elif is_huechroma:
+            if not self.cached_hue_chroma_colors:
+                self.onGenerateHueChroma()
+            else:
+                self.renderHueChromaGrid()
+            self.setLayoutVisibility(self.huechroma_grid, True)
+
+        elif is_lighthue:
+            if not self.cached_light_hue_colors:
+                self.onGenerateLightHue()
+            else:
+                self.renderLightHueGrid()
+            self.setLayoutVisibility(self.lighthue_grid, True)
 
     def setLayoutVisibility(self, layout, visible):
         for i in range(layout.count()):
@@ -385,7 +403,9 @@ class DockerTemplate(DockWidget): # type: ignore
 
             # Use HLS to extract chroma proxy (based on saturation)
             h, l, s = colorsys.rgb_to_hls(r_norm, g_norm, b_norm)
-            chroma_index = min(int(s * 25), 25)  # clamp to valid range [0–25]
+            # Clamp saturation to index range [0–25] for 26 discrete chroma steps
+            # Then normalize index back to [0–1]
+            chroma_index = min(int(s * 25), 25) / 25
 
             self.cached_light_hue_colors = self.GetLightHueColors(chroma_index)
             self.renderLightHueGrid()
@@ -467,53 +487,73 @@ class DockerTemplate(DockWidget): # type: ignore
             self.updateColorInfo()
 
     def onFgColorClick(self):
-        """Open color picker when foreground button is clicked"""
+        """Open color picker initialized with the current foreground color"""
         try:
-            color = QColorDialog.getColor()
+            view = Krita.instance().activeWindow().activeView()  # type: ignore
+            if not view:
+                return
+
+            fg_color = view.foregroundColor()
+            components = fg_color.components()
+            initial_color = QColor(
+                int(components[2] * 255),
+                int(components[1] * 255),
+                int(components[0] * 255),
+            )
+
+            color = QColorDialog.getColor(initial=initial_color)
             if color.isValid():
-                view = Krita.instance().activeWindow().activeView() # type: ignore
-                if view:
-                    managed = ManagedColor("RGBA", "U8", "")
-                    components = managed.components()
-                    components[2] = color.redF()
-                    components[1] = color.greenF()
-                    components[0] = color.blueF()
-                    components[3] = 1.0
-                    managed.setComponents(components)
-                    view.setForeGroundColor(managed)
-                    self.updateColorInfo()
-                    
-                    hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
-                    self.addColorToHistory(hex_code)
-                    
+                managed = ManagedColor("RGBA", "U8", "")
+                comps = managed.components()
+                comps[2] = color.redF()
+                comps[1] = color.greenF()
+                comps[0] = color.blueF()
+                comps[3] = 1.0
+                managed.setComponents(comps)
+                view.setForeGroundColor(managed)
+                self.updateColorInfo()
+
+                hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
+                self.addColorToHistory(hex_code)
+
         except Exception as e:
-            self.showError(f"FG Error: {str(e)}")
+            self.showError(f"FG Picker Error: {str(e)}")
 
     def onBgColorClick(self):
-        """Open color picker when background button is clicked"""
+        """Open color picker initialized with the current background color"""
         try:
-            color = QColorDialog.getColor()
+            view = Krita.instance().activeWindow().activeView()  # type: ignore
+            if not view:
+                return
+
+            bg_color = view.backgroundColor()
+            components = bg_color.components()
+            # Get current color to initialize dialog (R,G,B from Krita: BGR order)
+            initial_color = QColor(
+                int(components[2] * 255),
+                int(components[1] * 255),
+                int(components[0] * 255),
+            )
+
+            color = QColorDialog.getColor(initial=initial_color)
             if color.isValid():
-                view = Krita.instance().activeWindow().activeView() # type: ignore
-                if view:
-                    managed = ManagedColor("RGBA", "U8", "")
-                    components = managed.components()
-                    components[2] = color.redF()
-                    components[1] = color.greenF()
-                    components[0] = color.blueF()
-                    components[3] = 1.0
-                    managed.setComponents(components)
-                    view.setBackGroundColor(managed)
-                    self.updateColorInfo()
-                    
-                    hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
-                    self.addColorToHistory(hex_code)
-                    
-                    self.bg_color_label.setTextAndColor(hex_code, hex_code)
-                    self.bg_color_button.setStyleSheet(f"background-color: {hex_code};")
-                    
+                managed = ManagedColor("RGBA", "U8", "")
+                comps = managed.components()
+                comps[2] = color.redF()
+                comps[1] = color.greenF()
+                comps[0] = color.blueF()
+                comps[3] = 1.0
+                managed.setComponents(comps)
+                view.setBackGroundColor(managed)
+                self.updateColorInfo()
+
+                hex_code = "#{:02X}{:02X}{:02X}".format(color.red(), color.green(), color.blue())
+                self.addColorToHistory(hex_code)
+                self.bg_color_label.setTextAndColor(hex_code, hex_code)
+                self.bg_color_button.setStyleSheet(f"background-color: {hex_code};")
+
         except Exception as e:
-            self.showError(f"BG Error: {str(e)}")
+            self.showError(f"BG Picker Error: {str(e)}")
             
     def setBackGroundColor(self, color_hex):
         """Set the clicked color as the new background color using ManagedColor"""
